@@ -1,6 +1,6 @@
 import os
+from urllib.parse import urlparse
 from pymongo import MongoClient, ASCENDING, DESCENDING
-from datetime import datetime, timezone
 
 
 class Database:
@@ -10,10 +10,19 @@ class Database:
 
     def init_app(self, app):
         uri = os.getenv("MONGO_URI", "mongodb://localhost:27017/interviewforge")
+
+        db_name = self._extract_db_name(uri)
         self._client = MongoClient(uri)
-        self._db = self._client.get_default_database()
+        self._db = self._client[db_name]
 
         self._ensure_indexes()
+
+    def _extract_db_name(self, uri: str) -> str:
+        parsed = urlparse(uri)
+        path = parsed.path.lstrip("/")
+        if path:
+            return path.split("?")[0].split("/")[0]
+        return os.getenv("MONGO_DB_NAME", "interviewforge")
 
     def _ensure_indexes(self):
         self.users.create_index("email", unique=True)
