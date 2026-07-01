@@ -1,9 +1,8 @@
 flask
 flask-cors
-flask-sqlalchemy
 flask-jwt-extended
 python-dotenv
-psycopg2-binary
+pymongo
 pypdf
 python-docx
 google-generativeai

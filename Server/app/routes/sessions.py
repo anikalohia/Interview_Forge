@@ -1,10 +1,8 @@
+import uuid
+from datetime import datetime, timezone
 from flask import Blueprint, request, jsonify
 from flask_jwt_extended import jwt_required, get_jwt_identity
-from app import db
-from app.models.user import User
-from app.models.resume import Resume
-from app.models.session import Session, Question, Answer
-from app.models.report import Report
+from app.database import db
 from app.services.question_generator import generate_questions
 from app.services.scoring_engine import score_session
 
@@ -29,51 +27,54 @@ def start_session():
     if mode not in ("resume_round", "technical_round"):
         return jsonify({"error": "mode must be resume_round or technical_round"}), 400
 
-    resume = Resume.query.filter_by(id=resume_id, user_id=user_id).first()
+    resume = db.resumes.find_one({"_id": resume_id, "user_id": user_id})
     if not resume:
         return jsonify({"error": "Resume not found"}), 404
 
-    user = User.query.get(user_id)
-    target_role = user.target_role or "SDE"
-    experience_level = user.experience_level or "fresher"
+    user = db.users.find_one({"_id": user_id})
+    target_role = user.get("target_role") or "SDE"
+    experience_level = user.get("experience_level") or "fresher"
 
     questions_data = generate_questions(
-        resume.parsed_data, target_role, experience_level, mode
+        resume["parsed_data"], target_role, experience_level, mode
     )
 
-    session = Session(
-        user_id=user_id,
-        resume_id=resume_id,
-        mode=mode,
-        status="active",
-    )
-    db.session.add(session)
-    db.session.flush()
+    session_id = str(uuid.uuid4())
+    session = {
+        "_id": session_id,
+        "user_id": user_id,
+        "resume_id": resume_id,
+        "mode": mode,
+        "status": "active",
+        "started_at": datetime.now(timezone.utc),
+        "completed_at": None,
+    }
+    db.sessions.insert_one(session)
 
     saved_questions = []
     for q in questions_data:
-        question = Question(
-            session_id=session.id,
-            question_text=q["question_text"],
-            question_order=q.get("order", 1),
-            difficulty=q.get("difficulty", "medium"),
-            resume_anchor=q.get("resume_anchor"),
-        )
-        db.session.add(question)
+        question_id = str(uuid.uuid4())
+        question = {
+            "_id": question_id,
+            "session_id": session_id,
+            "question_text": q["question_text"],
+            "question_order": q.get("order", 1),
+            "difficulty": q.get("difficulty", "medium"),
+            "resume_anchor": q.get("resume_anchor"),
+        }
+        db.questions.insert_one(question)
         saved_questions.append(
             {
-                "id": question.id,
-                "text": question.question_text,
-                "order": question.question_order,
+                "id": question_id,
+                "text": q["question_text"],
+                "order": q.get("order", 1),
             }
         )
-
-    db.session.commit()
 
     return (
         jsonify(
             {
-                "session_id": session.id,
+                "session_id": session_id,
                 "questions": saved_questions,
             }
         ),
@@ -99,44 +100,57 @@ def submit_answer(session_id):
     if len(answer_text) < 30:
         return jsonify({"error": "Answer must be at least 30 characters"}), 400
 
-    session = Session.query.filter_by(id=session_id, user_id=user_id).first()
+    session = db.sessions.find_one({"_id": session_id, "user_id": user_id})
     if not session:
         return jsonify({"error": "Session not found"}), 404
 
-    if session.status != "active":
+    if session["status"] != "active":
         return jsonify({"error": "Session is not active"}), 400
 
-    question = Question.query.filter_by(
-        id=question_id, session_id=session_id
-    ).first()
+    question = db.questions.find_one({"_id": question_id, "session_id": session_id})
     if not question:
         return jsonify({"error": "Question not found in this session"}), 404
 
-    if question.answer:
+    existing_answer = db.answers.find_one({"question_id": question_id})
+    if existing_answer:
         return jsonify({"error": "Question already answered"}), 400
 
-    answer = Answer(question_id=question_id, answer_text=answer_text)
-    db.session.add(answer)
-    db.session.commit()
+    answer = {
+        "_id": str(uuid.uuid4()),
+        "question_id": question_id,
+        "answer_text": answer_text,
+        "submitted_at": datetime.now(timezone.utc),
+    }
+    db.answers.insert_one(answer)
 
-    remaining = (
-        Question.query.filter_by(session_id=session_id)
-        .outerjoin(Answer, Question.id == Answer.question_id)
-        .filter(Answer.id.is_(None))
-        .order_by(Question.question_order)
-        .all()
+    answered_ids = set(
+        a["question_id"]
+        for a in db.answers.find({"question_id": {"$ne": None}}).collation(None) if False
     )
+
+    all_questions = (
+        db.questions.find({"session_id": session_id})
+        .sort("question_order", 1)
+    )
+
+    question_ids = [q["_id"] for q in all_questions]
+    answered_q_ids = set(
+        a["question_id"]
+        for a in db.answers.find({"question_id": {"$in": question_ids}})
+    )
+
+    remaining = [qid for qid in question_ids if qid not in answered_q_ids]
 
     if not remaining:
         return jsonify({"session_complete": True})
 
-    next_q = remaining[0]
+    next_q = db.questions.find_one({"_id": remaining[0]})
     return jsonify(
         {
             "next_question": {
-                "id": next_q.id,
-                "text": next_q.question_text,
-                "order": next_q.question_order,
+                "id": next_q["_id"],
+                "text": next_q["question_text"],
+                "order": next_q["question_order"],
             },
             "session_complete": False,
         }
@@ -146,36 +160,37 @@ def submit_answer(session_id):
 @sessions_bp.route("/<session_id>/complete", methods=["POST"])
 @jwt_required()
 def complete_session(session_id):
-    from datetime import datetime, timezone
-
     user_id = get_jwt_identity()
-    session = Session.query.filter_by(id=session_id, user_id=user_id).first()
+    session = db.sessions.find_one({"_id": session_id, "user_id": user_id})
     if not session:
         return jsonify({"error": "Session not found"}), 404
 
-    if session.status != "active":
+    if session["status"] != "active":
         return jsonify({"error": "Session already completed"}), 400
 
-    questions = (
-        Question.query.filter_by(session_id=session_id)
-        .order_by(Question.question_order)
-        .all()
+    questions = list(
+        db.questions.find({"session_id": session_id})
+        .sort("question_order", 1)
     )
 
     if not questions:
         return jsonify({"error": "Session has no questions"}), 400
 
-    answered = all(q.answer for q in questions)
-    if not answered:
+    question_ids = [q["_id"] for q in questions]
+    answers_found = list(db.answers.find({"question_id": {"$in": question_ids}}))
+    answer_map = {a["question_id"]: a for a in answers_found}
+
+    if len(answers_found) != len(questions):
         return jsonify({"error": "Not all questions have been answered"}), 400
 
     qa_pairs = []
     for q in questions:
+        a = answer_map.get(q["_id"])
         qa_pairs.append(
             {
-                "question_id": q.id,
-                "question_text": q.question_text,
-                "answer_text": q.answer.answer_text if q.answer else "",
+                "question_id": q["_id"],
+                "question_text": q["question_text"],
+                "answer_text": a["answer_text"] if a else "",
             }
         )
 
@@ -184,79 +199,85 @@ def complete_session(session_id):
     except Exception as e:
         return jsonify({"error": f"Scoring failed: {str(e)}"}), 500
 
-    report = Report(
-        session_id=session_id,
-        overall_score=scores["overall_score"],
-        dimension_scores=scores["dimension_scores"],
-        question_feedback=scores["question_feedback"],
-        summary=scores["summary"],
+    report_id = str(uuid.uuid4())
+    report = {
+        "_id": report_id,
+        "session_id": session_id,
+        "overall_score": scores["overall_score"],
+        "dimension_scores": scores["dimension_scores"],
+        "question_feedback": scores["question_feedback"],
+        "summary": scores["summary"],
+        "created_at": datetime.now(timezone.utc),
+    }
+    db.reports.insert_one(report)
+
+    db.sessions.update_one(
+        {"_id": session_id},
+        {"$set": {"status": "completed", "completed_at": datetime.now(timezone.utc)}},
     )
-    db.session.add(report)
 
-    session.status = "completed"
-    session.completed_at = datetime.now(timezone.utc)
-    db.session.commit()
-
-    return jsonify({"report_id": report.id}), 201
+    return jsonify({"report_id": report_id}), 201
 
 
 @sessions_bp.route("/", methods=["GET"])
 @jwt_required()
 def list_sessions():
     user_id = get_jwt_identity()
-    sessions = (
-        Session.query.filter_by(user_id=user_id)
-        .order_by(Session.started_at.desc())
-        .all()
+    sessions_cursor = (
+        db.sessions.find({"user_id": user_id})
+        .sort("started_at", -1)
     )
 
-    return jsonify(
-        {
-            "sessions": [
-                {
-                    "id": s.id,
-                    "mode": s.mode,
-                    "status": s.status,
-                    "started_at": s.started_at.isoformat() if s.started_at else None,
-                    "completed_at": s.completed_at.isoformat() if s.completed_at else None,
-                    "has_report": s.report is not None,
-                }
-                for s in sessions
-            ]
-        }
-    )
+    result = []
+    for s in sessions_cursor:
+        report = db.reports.find_one({"session_id": s["_id"]})
+        result.append(
+            {
+                "id": s["_id"],
+                "mode": s["mode"],
+                "status": s["status"],
+                "started_at": s["started_at"].isoformat() if s.get("started_at") else None,
+                "completed_at": s["completed_at"].isoformat() if s.get("completed_at") else None,
+                "has_report": report is not None,
+            }
+        )
+
+    return jsonify({"sessions": result})
 
 
 @sessions_bp.route("/<session_id>", methods=["GET"])
 @jwt_required()
 def get_session(session_id):
     user_id = get_jwt_identity()
-    session = Session.query.filter_by(id=session_id, user_id=user_id).first()
+    session = db.sessions.find_one({"_id": session_id, "user_id": user_id})
     if not session:
         return jsonify({"error": "Session not found"}), 404
 
-    questions = (
-        Question.query.filter_by(session_id=session_id)
-        .order_by(Question.question_order)
-        .all()
+    questions = list(
+        db.questions.find({"session_id": session_id})
+        .sort("question_order", 1)
     )
+
+    question_ids = [q["_id"] for q in questions]
+    answers_found = list(db.answers.find({"question_id": {"$in": question_ids}}))
+    answer_map = {a["question_id"]: a for a in answers_found}
 
     return jsonify(
         {
-            "id": session.id,
-            "mode": session.mode,
-            "status": session.status,
-            "started_at": session.started_at.isoformat() if session.started_at else None,
-            "completed_at": session.completed_at.isoformat() if session.completed_at else None,
+            "id": session["_id"],
+            "mode": session["mode"],
+            "status": session["status"],
+            "started_at": session["started_at"].isoformat() if session.get("started_at") else None,
+            "completed_at": session["completed_at"].isoformat() if session.get("completed_at") else None,
             "questions": [
                 {
-                    "id": q.id,
-                    "text": q.question_text,
-                    "order": q.question_order,
-                    "difficulty": q.difficulty,
-                    "resume_anchor": q.resume_anchor,
-                    "answered": q.answer is not None,
-                    "answer_text": q.answer.answer_text if q.answer else None,
+                    "id": q["_id"],
+                    "text": q["question_text"],
+                    "order": q["question_order"],
+                    "difficulty": q.get("difficulty"),
+                    "resume_anchor": q.get("resume_anchor"),
+                    "answered": q["_id"] in answer_map,
+                    "answer_text": answer_map[q["_id"]]["answer_text"] if q["_id"] in answer_map else None,
                 }
                 for q in questions
             ],

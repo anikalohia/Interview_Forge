@@ -1,7 +1,6 @@
 from flask import Blueprint, jsonify
 from flask_jwt_extended import jwt_required, get_jwt_identity
-from app.models.report import Report
-from app.models.session import Session
+from app.database import db
 
 reports_bp = Blueprint("reports", __name__)
 
@@ -11,24 +10,23 @@ reports_bp = Blueprint("reports", __name__)
 def get_report(report_id):
     user_id = get_jwt_identity()
 
-    report = (
-        Report.query.join(Session, Report.session_id == Session.id)
-        .filter(Report.id == report_id, Session.user_id == user_id)
-        .first()
-    )
-
+    report = db.reports.find_one({"_id": report_id})
     if not report:
+        return jsonify({"error": "Report not found"}), 404
+
+    session = db.sessions.find_one({"_id": report["session_id"], "user_id": user_id})
+    if not session:
         return jsonify({"error": "Report not found"}), 404
 
     return jsonify(
         {
-            "id": report.id,
-            "session_id": report.session_id,
-            "overall_score": report.overall_score,
-            "dimension_scores": report.dimension_scores,
-            "question_feedback": report.question_feedback,
-            "summary": report.summary,
-            "created_at": report.created_at.isoformat() if report.created_at else None,
+            "id": report["_id"],
+            "session_id": report["session_id"],
+            "overall_score": report["overall_score"],
+            "dimension_scores": report["dimension_scores"],
+            "question_feedback": report["question_feedback"],
+            "summary": report["summary"],
+            "created_at": report["created_at"].isoformat() if report.get("created_at") else None,
         }
     )
 
@@ -38,23 +36,22 @@ def get_report(report_id):
 def get_report_by_session(session_id):
     user_id = get_jwt_identity()
 
-    report = (
-        Report.query.join(Session, Report.session_id == Session.id)
-        .filter(Session.id == session_id, Session.user_id == user_id)
-        .first()
-    )
+    session = db.sessions.find_one({"_id": session_id, "user_id": user_id})
+    if not session:
+        return jsonify({"error": "Session not found"}), 404
 
+    report = db.reports.find_one({"session_id": session_id})
     if not report:
         return jsonify({"error": "Report not found for this session"}), 404
 
     return jsonify(
         {
-            "id": report.id,
-            "session_id": report.session_id,
-            "overall_score": report.overall_score,
-            "dimension_scores": report.dimension_scores,
-            "question_feedback": report.question_feedback,
-            "summary": report.summary,
-            "created_at": report.created_at.isoformat() if report.created_at else None,
+            "id": report["_id"],
+            "session_id": report["session_id"],
+            "overall_score": report["overall_score"],
+            "dimension_scores": report["dimension_scores"],
+            "question_feedback": report["question_feedback"],
+            "summary": report["summary"],
+            "created_at": report["created_at"].isoformat() if report.get("created_at") else None,
         }
     )

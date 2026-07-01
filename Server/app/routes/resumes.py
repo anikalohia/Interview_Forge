@@ -1,10 +1,9 @@
 import os
+import uuid
+from datetime import datetime, timezone
 from flask import Blueprint, request, jsonify
 from flask_jwt_extended import jwt_required, get_jwt_identity
-from werkzeug.utils import secure_filename
-from app import db
-from app.models.resume import Resume
-from app.models.user import User
+from app.database import db
 from app.services.resume_parser import parse_resume
 
 resumes_bp = Blueprint("resumes", __name__)
@@ -21,7 +20,7 @@ def allowed_file(filename):
 @jwt_required()
 def upload_resume():
     user_id = get_jwt_identity()
-    user = User.query.get(user_id)
+    user = db.users.find_one({"_id": user_id})
     if not user:
         return jsonify({"error": "User not found"}), 404
 
@@ -46,20 +45,22 @@ def upload_resume():
     except Exception as e:
         return jsonify({"error": f"Failed to parse resume: {str(e)}"}), 500
 
-    resume = Resume(
-        user_id=user_id,
-        parsed_data=result["parsed_data"],
-        raw_text=result["raw_text"],
-    )
-    db.session.add(resume)
-    db.session.commit()
+    resume_id = str(uuid.uuid4())
+    resume = {
+        "_id": resume_id,
+        "user_id": user_id,
+        "parsed_data": result["parsed_data"],
+        "raw_text": result["raw_text"],
+        "created_at": datetime.now(timezone.utc),
+    }
+    db.resumes.insert_one(resume)
 
     return (
         jsonify(
             {
-                "resume_id": resume.id,
-                "parsed_data": resume.parsed_data,
-                "created_at": resume.created_at.isoformat() if resume.created_at else None,
+                "resume_id": resume_id,
+                "parsed_data": resume["parsed_data"],
+                "created_at": resume["created_at"].isoformat(),
             }
         ),
         201,
@@ -70,15 +71,15 @@ def upload_resume():
 @jwt_required()
 def get_resume(resume_id):
     user_id = get_jwt_identity()
-    resume = Resume.query.filter_by(id=resume_id, user_id=user_id).first()
+    resume = db.resumes.find_one({"_id": resume_id, "user_id": user_id})
     if not resume:
         return jsonify({"error": "Resume not found"}), 404
 
     return jsonify(
         {
-            "resume_id": resume.id,
-            "parsed_data": resume.parsed_data,
-            "created_at": resume.created_at.isoformat() if resume.created_at else None,
+            "resume_id": resume["_id"],
+            "parsed_data": resume["parsed_data"],
+            "created_at": resume["created_at"].isoformat() if resume.get("created_at") else None,
         }
     )
 
@@ -87,21 +88,20 @@ def get_resume(resume_id):
 @jwt_required()
 def list_resumes():
     user_id = get_jwt_identity()
-    resumes = (
-        Resume.query.filter_by(user_id=user_id)
-        .order_by(Resume.created_at.desc())
-        .all()
+    resumes_cursor = (
+        db.resumes.find({"user_id": user_id})
+        .sort("created_at", -1)
     )
 
     return jsonify(
         {
             "resumes": [
                 {
-                    "resume_id": r.id,
-                    "parsed_data": r.parsed_data,
-                    "created_at": r.created_at.isoformat() if r.created_at else None,
+                    "resume_id": r["_id"],
+                    "parsed_data": r["parsed_data"],
+                    "created_at": r["created_at"].isoformat() if r.get("created_at") else None,
                 }
-                for r in resumes
+                for r in resumes_cursor
             ]
         }
     )
