@@ -1,0 +1,85 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+@import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800;900&family=Space+Grotesk:wght@500;600;700&family=JetBrains+Mono:wght@400;500;700&display=swap');
+
+@layer base {
+  body {
+    @apply bg-nb-yellow text-nb-black font-sans;
+  }
+
+  h1, h2, h3, h4 {
+    @apply font-display font-bold;
+  }
+}
+
+@layer components {
+  .neo-btn {
+    @apply px-6 py-3 font-bold text-lg border-3 border-nb-black bg-nb-white
+           shadow-nb hover:shadow-nb-hover hover:translate-x-[2px] hover:translate-y-[2px]
+           transition-all duration-100 active:translate-x-[4px] active:translate-y-[4px]
+           active:shadow-none cursor-pointer;
+  }
+
+  .neo-btn-primary {
+    @apply neo-btn bg-nb-blue text-nb-white border-nb-black;
+  }
+
+  .neo-btn-secondary {
+    @apply neo-btn bg-nb-pink text-nb-white border-nb-black;
+  }
+
+  .neo-btn-green {
+    @apply neo-btn bg-nb-green text-nb-white border-nb-black;
+  }
+
+  .neo-btn-small {
+    @apply px-4 py-2 font-bold text-base border-3 border-nb-black bg-nb-white
+           shadow-nb-sm hover:shadow-nb-hover transition-all duration-100
+           active:translate-x-[2px] active:translate-y-[2px] active:shadow-none cursor-pointer;
+  }
+
+  .neo-card {
+    @apply bg-nb-white border-3 border-nb-black shadow-nb p-6;
+  }
+
+  .neo-card-colored {
+    @apply neo-card;
+  }
+
+  .neo-input {
+    @apply w-full px-4 py-3 border-3 border-nb-black bg-nb-white
+           text-nb-black font-sans text-base
+           focus:outline-none focus:shadow-nb focus:translate-x-[1px] focus:translate-y-[1px]
+           transition-all duration-100;
+  }
+
+  .neo-label {
+    @apply font-display font-bold text-lg block mb-2;
+  }
+
+  .neo-badge {
+    @apply inline-block px-3 py-1 text-sm font-bold border-2 border-nb-black
+           shadow-nb-sm;
+  }
+
+  .neo-divider {
+    @apply h-3 border-t-3 border-nb-black my-6;
+  }
+
+  .neo-tag {
+    @apply inline-block px-3 py-1 text-sm font-bold bg-nb-yellow
+           border-2 border-nb-black shadow-nb-sm mr-2 mb-2;
+  }
+}
+
+@layer utilities {
+  .text-balance {
+    text-wrap: balance;
+  }
+}
+
+* {
+  box-sizing: border-box;
+}

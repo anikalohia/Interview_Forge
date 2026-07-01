@@ -1,0 +1,13 @@
+flask
+flask-cors
+flask-sqlalchemy
+flask-jwt-extended
+python-dotenv
+psycopg2-binary
+pypdf
+python-docx
+google-generativeai
+httpx
+gunicorn
+tenacity
+werkzeug
